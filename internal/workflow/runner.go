@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -350,7 +351,6 @@ optimize:
 			return model.RunSummary{}, err
 		}
 		r.announce("No actionable code changes were produced; stopping before writeback")
-		r.announce("Resolve the environment blocker and run again to reach the implementation stage")
 		return state.summary(opts.ProjectRoot), nil
 	}
 	r.announce("Optimization plan ready; creating backups before applying changes")
@@ -707,8 +707,14 @@ func (r *Runner) generatePlan(ctx context.Context, state *result, goal model.Goa
 	var plan model.PlanDoc
 	started := time.Now()
 	files := listWorkspaceFiles(workspace, 40, r.Effective.Profile.SensitivePaths)
+	sourceTargets := collectSourceCandidates(workspace, 8, r.Effective.Profile.SensitivePaths)
 	systemPrompt := "You are the optimization preview assistant. Given the goal and judgment, output JSON with fields summary, changes, notes. changes should be a list of file path, action, and reason entries. Do not modify files."
 	userPrompt := fmt.Sprintf("Goal: %s\nJudgment summary:\n%s\nWorkspace files: %s\n", renderGoalInput(goal), renderOptimizationJudgment(judgment), strings.Join(files, ", "))
+	if len(sourceTargets) > 0 {
+		userPrompt += "Candidate source excerpts:\n"
+		userPrompt += snapshotFiles(workspace, sourceTargets)
+		userPrompt += "Prefer returning concrete file paths from the candidate excerpts when suggesting repeated-logic cleanup.\n"
+	}
 	if err := writeLLMExchange(state.artifacts, "preview", systemPrompt, userPrompt, &plan, func() error {
 		return r.Provider.CompleteJSON(ctx, r.Effective.RoleModels.Judge, systemPrompt, userPrompt, &plan)
 	}); err != nil {
@@ -720,6 +726,14 @@ func (r *Runner) generatePlan(ctx context.Context, state *result, goal model.Goa
 		return model.PlanDoc{}, err
 	}
 	plan, skippedPreviewPaths := filterPlannedChanges(plan, r.Effective.Profile.SensitivePaths)
+	if len(plan.Changes) == 0 {
+		fallback := fallbackPlannedChanges(sourceTargets)
+		if len(fallback) > 0 {
+			r.announce("Preview returned no concrete file paths; using %d generic source candidates", len(fallback))
+			plan.Changes = fallback
+			plan.Notes = append(plan.Notes, "Generic source candidates were auto-selected because the preview response did not include concrete file paths.")
+		}
+	}
 	if len(skippedPreviewPaths) > 0 {
 		r.announce("Preview output included %d sensitive paths; they were ignored", len(skippedPreviewPaths))
 		plan.Notes = append(plan.Notes, fmt.Sprintf("Ignored sensitive paths: %s", strings.Join(skippedPreviewPaths, ", ")))
@@ -984,6 +998,100 @@ func renderPathList(paths []string) string {
 		builder.WriteString("\n")
 	}
 	return builder.String()
+}
+
+func collectSourceCandidates(root string, limit int, sensitivePatterns []string) []string {
+	files := listWorkspaceFiles(root, 100000, sensitivePatterns)
+	code := make([]string, 0, len(files))
+	tests := make([]string, 0)
+	for _, rel := range files {
+		if !isSourceCandidatePath(rel) {
+			continue
+		}
+		if isTestLikePath(rel) {
+			tests = append(tests, rel)
+			continue
+		}
+		code = append(code, rel)
+	}
+	sort.Strings(code)
+	sort.Strings(tests)
+	candidates := append(code, tests...)
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates
+}
+
+func isSourceCandidatePath(rel string) bool {
+	path := strings.ToLower(filepath.ToSlash(rel))
+	if path == "" {
+		return false
+	}
+	if strings.Contains(path, "/testdata/") || strings.HasPrefix(path, "testdata/") || strings.Contains(path, "/vendor/") || strings.Contains(path, "/node_modules/") || strings.Contains(path, "/generated/") || strings.Contains(path, "/gen-go/") {
+		return false
+	}
+	if strings.HasPrefix(path, ".agent-engine/") {
+		return false
+	}
+	if strings.HasSuffix(path, ".pb.go") || strings.HasSuffix(path, ".pb.gw.go") {
+		return false
+	}
+	switch {
+	case strings.HasSuffix(path, ".go"),
+		strings.HasSuffix(path, ".js"),
+		strings.HasSuffix(path, ".jsx"),
+		strings.HasSuffix(path, ".ts"),
+		strings.HasSuffix(path, ".tsx"),
+		strings.HasSuffix(path, ".py"),
+		strings.HasSuffix(path, ".java"),
+		strings.HasSuffix(path, ".kt"),
+		strings.HasSuffix(path, ".kts"),
+		strings.HasSuffix(path, ".rs"),
+		strings.HasSuffix(path, ".cs"),
+		strings.HasSuffix(path, ".rb"),
+		strings.HasSuffix(path, ".php"),
+		strings.HasSuffix(path, ".c"),
+		strings.HasSuffix(path, ".cc"),
+		strings.HasSuffix(path, ".cpp"),
+		strings.HasSuffix(path, ".h"),
+		strings.HasSuffix(path, ".hpp"),
+		strings.HasSuffix(path, ".m"),
+		strings.HasSuffix(path, ".mm"),
+		strings.HasSuffix(path, ".swift"),
+		strings.HasSuffix(path, ".sh"),
+		strings.HasSuffix(path, ".yaml"),
+		strings.HasSuffix(path, ".yml"),
+		strings.HasSuffix(path, ".toml"),
+		strings.HasSuffix(path, ".json"),
+		strings.HasSuffix(path, ".xml"),
+		strings.HasSuffix(path, ".proto"),
+		strings.HasSuffix(path, ".sql"):
+		return true
+	case filepath.Base(path) == "dockerfile",
+		filepath.Base(path) == "makefile",
+		filepath.Base(path) == "procfile":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTestLikePath(rel string) bool {
+	path := strings.ToLower(filepath.ToSlash(rel))
+	return strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/test/") || strings.Contains(path, "/tests/")
+}
+
+func fallbackPlannedChanges(paths []string) []model.PlannedChange {
+	changes := make([]model.PlannedChange, 0, len(paths))
+	for _, rel := range unique(paths) {
+		changes = append(changes, model.PlannedChange{
+			Path:   rel,
+			Action: "review",
+			Reason: "Auto-selected generic source candidate because the preview response did not include a concrete file path.",
+		})
+	}
+	return changes
 }
 
 func renderSpecList(specs []string) string {
