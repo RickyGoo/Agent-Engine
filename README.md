@@ -1,20 +1,17 @@
 # Agent Engine
 
-`Agent Engine` is a multi-role LLM CLI for code repositories. It runs a closed-loop workflow of analysis, judgment, preview, optimization, verification, and rollback/write-back.
+`Agent Engine` is a multi-role LLM CLI for code repositories. It turns an ad hoc coding request into a safe, repeatable workflow: analyze, judge, preview, optimize, verify, and either write back or roll back.
 
-It is a good fit for scenarios where you want to:
-- let an LLM evaluate a project before deciding whether to change code
-- preview modifications in an isolated workspace before confirming manually
-- keep prompts, responses, command output, and traces in one audit trail
+> Designed for teams that want AI-assisted code changes without giving up control, traceability, or rollback safety.
 
-## Key Features
+## What It Gives You
 
-- Role separation: `executor`, `judge`, and `optimizer` can each be mapped to different models.
-- Safe workspace: the project is copied into an isolated workspace by default, so the original tree is never edited directly.
-- Manual confirmation: the workflow pauses for confirmation after the judgment stage before optimization begins.
-- Scan mode: preview and rollback are checked first, then write-back is decided.
-- Sensitive path protection: high-risk paths such as `.env`, secrets, and certificates are filtered by default.
-- Auditable artifacts: prompts, responses, execution results, decision docs, and traces are retained.
+- Clear role separation: `executor`, `judge`, and `optimizer` can each map to a different model.
+- Safer execution: changes happen in an isolated workspace, not the original tree.
+- Human approval gate: the workflow pauses after judgment and before optimization.
+- Scan mode support: preview first, then decide whether to write back.
+- Sensitive path filtering: high-risk files such as `.env`, secrets, and certificates are excluded by default.
+- Full audit trail: prompts, responses, command output, decisions, and traces are preserved.
 
 ## Architecture
 
@@ -43,17 +40,17 @@ flowchart TD
   WS --> A
 ```
 
-## Workflow
+## How It Works
 
 1. Load global and project configuration.
-2. Detect or select a profile.
-3. Collect the optimization goal.
-4. Run the baseline command in an isolated workspace.
-5. Produce judgment and preview results.
-6. Wait for user confirmation.
-7. Generate an optimization plan and apply edits in the isolated workspace.
-8. Run verification.
-9. Produce the final decision, then write back or roll back.
+2. Detect or select a profile for the target repo.
+3. Collect the optimization goal and constraints.
+4. Copy the project into an isolated workspace.
+5. Run the baseline command and capture results.
+6. Produce judgment and preview artifacts.
+7. Wait for user confirmation.
+8. Generate and apply the optimization plan.
+9. Run verification, then write back or roll back.
 
 ## Install
 
@@ -63,7 +60,7 @@ go build ./cmd/agent-engine
 
 ## Quick Start
 
-### 1. Initialize Configuration
+### 1. Initialize a Project
 
 ```bash
 ./agent-engine init --root /path/to/project
@@ -76,7 +73,7 @@ During initialization, the following will be configured:
 - API key storage method
 - project profile
 
-### 2. Run Optimization
+### 2. Run an Optimization
 
 ```bash
 ./agent-engine run --root /path/to/project --goal "simplify code"
@@ -94,7 +91,7 @@ You can also provide a structured goal:
   --notes "focus on hot path"
 ```
 
-### 3. Preview Mode
+### 3. Preview Only
 
 ```bash
 ./agent-engine run --root /path/to/project --dry-run
@@ -116,7 +113,7 @@ You can also provide a structured goal:
 
 ### Global Configuration
 
-The default location is determined by the system config directory. Common paths look like:
+The default location is determined by the system config directory. Common paths are:
 
 ```text
 ~/Library/Application Support/agent-engine/config.json
@@ -130,7 +127,7 @@ or:
 
 ### Project Configuration
 
-The project root will contain:
+The project root contains:
 
 ```text
 .agent-engine.json
@@ -138,7 +135,7 @@ The project root will contain:
 
 ### Run Artifacts
 
-By default, artifacts are written to:
+By default, run artifacts are written to:
 
 ```text
 ~/.local/state/agent-engine/runs/<run-id>
@@ -155,19 +152,20 @@ Each run stores:
 
 ## Default Profiles
 
-If a project contains `go.mod`, the Go default profile is used automatically.
+| Project marker | Default profile |
+| --- | --- |
+| `go.mod` | Go |
+| `package.json` | Node |
 
-If a project contains `package.json`, the Node default profile is used automatically.
-
-You can also specify a profile explicitly in the project configuration.
+You can also set a profile explicitly in the project configuration.
 
 ## Security Design
 
-- Copy to an isolated workspace before any edits or verification.
+- Copy to an isolated workspace before edits or verification.
 - Back up related files automatically before changes are made.
 - Roll back when the decision is to reject.
 - Filter sensitive paths by default.
-- API keys can be stored in `env` or `keychain`.
+- Store API keys in `env` or `keychain`.
 
 ## Supported Providers
 
