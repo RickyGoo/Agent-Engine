@@ -1,0 +1,9 @@
+.idea/
+.codex/
+.openspec/
+openspec/
+.DS_Store
+*.log
+bin/
+dist/
+tmp/
