@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -19,6 +20,10 @@ func NewConsole(in io.Reader, out, err io.Writer) *Console {
 		out: out,
 		err: err,
 	}
+}
+
+type SelectOption struct {
+	Label string
 }
 
 func (c *Console) Ask(prompt string) (string, error) {
@@ -41,6 +46,34 @@ func (c *Console) AskDefault(prompt, defaultValue string) (string, error) {
 		return defaultValue, nil
 	}
 	return value, nil
+}
+
+func (c *Console) Select(prompt string, options []SelectOption, defaultIndex int) (int, error) {
+	if len(options) == 0 {
+		return 0, fmt.Errorf("no select options provided")
+	}
+	if defaultIndex < 0 || defaultIndex >= len(options) {
+		defaultIndex = 0
+	}
+	for i, option := range options {
+		if _, err := fmt.Fprintf(c.out, "  %d) %s\n", i+1, option.Label); err != nil {
+			return 0, err
+		}
+	}
+	value, err := c.Ask(fmt.Sprintf("%s [%d]: ", prompt, defaultIndex+1))
+	if err != nil {
+		return 0, err
+	}
+	if value == "" {
+		return defaultIndex, nil
+	}
+	if index, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+		index--
+		if index >= 0 && index < len(options) {
+			return index, nil
+		}
+	}
+	return 0, fmt.Errorf("invalid selection %q", value)
 }
 
 func (c *Console) Confirm(prompt string, defaultValue bool) (bool, error) {

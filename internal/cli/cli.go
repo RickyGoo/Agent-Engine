@@ -62,7 +62,10 @@ func runInit(args []string, console *ui.Console) error {
 	if err != nil {
 		return err
 	}
-	probeClient := provider.NewOpenAICompatibleClient(wizardResult.Global.Provider.Endpoint, wizardResult.Global.Provider.APIKeyRef, store)
+	probeClient, err := provider.NewClient(wizardResult.Global.Provider, store)
+	if err != nil {
+		return err
+	}
 	if err := validateProviderConnectivity(context.Background(), probeClient, wizardResult.Global.RoleModels); err != nil {
 		return err
 	}
@@ -106,7 +109,10 @@ func runWorkflow(args []string, console *ui.Console, showConfigOnly bool) error 
 	if err := config.ValidateEffective(effective); err != nil {
 		return err
 	}
-	providerClient := provider.NewOpenAICompatibleClient(effective.Provider.Endpoint, effective.Provider.APIKeyRef, secrets)
+	providerClient, err := provider.NewClient(effective.Provider, secrets)
+	if err != nil {
+		return err
+	}
 	runner := workflow.NewRunner(effective, console, providerClient, secrets, absRoot)
 	mode, err := chooseRunMode(console)
 	if err != nil {
@@ -193,7 +199,10 @@ func runValidate(args []string, console *ui.Console) error {
 	if err := config.ValidateEffective(effective); err != nil {
 		return err
 	}
-	client := provider.NewOpenAICompatibleClient(effective.Provider.Endpoint, effective.Provider.APIKeyRef, secrets)
+	client, err := provider.NewClient(effective.Provider, secrets)
+	if err != nil {
+		return err
+	}
 	if err := validateProviderConnectivity(context.Background(), client, effective.RoleModels); err != nil {
 		return err
 	}
@@ -267,7 +276,7 @@ func printUsage(out io.Writer) {
 	_, _ = fmt.Fprintln(out, "  agent-engine config --root <project>")
 }
 
-func validateProviderConnectivity(ctx context.Context, client *provider.OpenAICompatibleClient, models model.RoleModels) error {
+func validateProviderConnectivity(ctx context.Context, client provider.Client, models model.RoleModels) error {
 	if client == nil {
 		return fmt.Errorf("provider client is required")
 	}

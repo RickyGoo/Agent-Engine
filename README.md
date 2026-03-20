@@ -67,9 +67,9 @@ go build ./cmd/agent-engine
 ```
 
 During initialization, the following will be configured:
-- LLM provider
+- LLM provider selection
 - provider API endpoint
-- executor / judge / optimizer model mapping
+- executor / judge / optimizer model selection from a curated menu
 - API key storage method
 - project profile
 
@@ -169,9 +169,9 @@ You can also set a profile explicitly in the project configuration.
 
 ## Supported Providers
 
-The current implementation uses the OpenAI-compatible API.
+The current implementation supports OpenAI-compatible, Anthropic Claude, and Google Gemini providers.
 
-Any service that supports a chat/completions-style interface can be integrated.
+The first-run wizard offers a curated set of common model choices for each provider plus a custom option.
 
 ## Directory Structure
 

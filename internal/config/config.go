@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"agent-engine/internal/model"
+	"agent-engine/internal/provider"
 )
 
 const (
@@ -16,15 +17,19 @@ const (
 )
 
 func DefaultGlobalConfig() model.GlobalConfig {
+	option, ok := provider.ProviderOptionByName("openai-compatible")
+	if !ok {
+		option = provider.SupportedProviders()[0]
+	}
 	return model.GlobalConfig{
 		Version:         1,
-		DefaultProvider: "openai",
+		DefaultProvider: option.ID,
 		Provider: model.ProviderSettings{
-			Name:     "openai",
-			Endpoint: "https://api.openai.com/v1/chat/completions",
+			Name:     option.ID,
+			Endpoint: option.DefaultEndpoint,
 			APIKeyRef: model.SecretRef{
 				Kind: "env",
-				Name: "OPENAI_API_KEY",
+				Name: option.DefaultAPIKeyEnv,
 			},
 		},
 		RoleModels: model.RoleModels{
@@ -70,6 +75,23 @@ func LoadGlobal(path string) (model.GlobalConfig, error) {
 	}
 	if cfg.RunOutputDir == "" {
 		cfg.RunOutputDir = DefaultRunOutputDir()
+	}
+	if cfg.DefaultProvider == "" {
+		cfg.DefaultProvider = "openai-compatible"
+	}
+	if option, ok := provider.ProviderOptionByName(cfg.Provider.Name); ok {
+		cfg.Provider.Name = option.ID
+		if cfg.Provider.Endpoint == "" {
+			cfg.Provider.Endpoint = option.DefaultEndpoint
+		}
+		if cfg.Provider.APIKeyRef.Kind == "" && cfg.Provider.APIKeyRef.Name == "" {
+			cfg.Provider.APIKeyRef = model.SecretRef{
+				Kind: "env",
+				Name: option.DefaultAPIKeyEnv,
+			}
+		}
+	} else if cfg.Provider.Endpoint == "" {
+		cfg.Provider.Endpoint = provider.SupportedProviders()[0].DefaultEndpoint
 	}
 	if cfg.Provider.Endpoint == "" {
 		cfg.Provider.Endpoint = "https://api.openai.com/v1/chat/completions"

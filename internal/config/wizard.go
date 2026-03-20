@@ -8,6 +8,7 @@ import (
 
 	"agent-engine/internal/model"
 	"agent-engine/internal/project"
+	"agent-engine/internal/provider"
 	"agent-engine/internal/secret"
 	"agent-engine/internal/ui"
 )
@@ -26,16 +27,14 @@ func RunWizard(ctx context.Context, root string, console *ui.Console, secretStor
 
 	console.Println("Agent Engine initial setup")
 
-	providerName, err := console.AskDefault("LLM provider name", global.DefaultProvider)
+	providerOption, err := selectProvider(console, global.DefaultProvider)
 	if err != nil {
 		return WizardResult{}, err
 	}
-	if providerName != "" {
-		global.DefaultProvider = providerName
-		global.Provider.Name = providerName
-	}
+	global.DefaultProvider = providerOption.ID
+	global.Provider.Name = providerOption.ID
 
-	endpoint, err := console.AskDefault("Provider API endpoint (for example https://api.openai.com/v1/chat/completions)", global.Provider.Endpoint)
+	endpoint, err := console.AskDefault("Provider API endpoint", providerOption.DefaultEndpoint)
 	if err != nil {
 		return WizardResult{}, err
 	}
@@ -81,27 +80,21 @@ func RunWizard(ctx context.Context, root string, console *ui.Console, secretStor
 	projectCfg.Profile = profile.Name
 	projectCfg.Profiles[profile.Name] = profile
 
-	executorModel, err := console.AskDefault("Executor model", global.RoleModels.Executor)
+	executorModel, err := selectRoleModel(console, providerOption.ID, model.RoleExecutor, global.RoleModels.Executor)
 	if err != nil {
 		return WizardResult{}, err
 	}
-	if executorModel != "" {
-		global.RoleModels.Executor = executorModel
-	}
-	judgeModel, err := console.AskDefault("Judge model", global.RoleModels.Judge)
+	global.RoleModels.Executor = executorModel
+	judgeModel, err := selectRoleModel(console, providerOption.ID, model.RoleJudge, global.RoleModels.Judge)
 	if err != nil {
 		return WizardResult{}, err
 	}
-	if judgeModel != "" {
-		global.RoleModels.Judge = judgeModel
-	}
-	optimizerModel, err := console.AskDefault("Optimizer model", global.RoleModels.Optimizer)
+	global.RoleModels.Judge = judgeModel
+	optimizerModel, err := selectRoleModel(console, providerOption.ID, model.RoleOptimizer, global.RoleModels.Optimizer)
 	if err != nil {
 		return WizardResult{}, err
 	}
-	if optimizerModel != "" {
-		global.RoleModels.Optimizer = optimizerModel
-	}
+	global.RoleModels.Optimizer = optimizerModel
 
 	useGoalTemplate, err := console.Confirm("Configure a default optimization goal template?", false)
 	if err != nil {
@@ -115,7 +108,7 @@ func RunWizard(ctx context.Context, root string, console *ui.Console, secretStor
 		projectCfg.GoalTemplate = &template
 	}
 
-	ref, err := configureSecret(ctx, console, secretStore, global.Provider.Name)
+	ref, err := configureSecret(ctx, console, secretStore, providerOption)
 	if err != nil {
 		return WizardResult{}, err
 	}
@@ -175,7 +168,84 @@ func askGoalTemplate(console *ui.Console) (model.GoalInput, error) {
 	}, nil
 }
 
-func configureSecret(ctx context.Context, console *ui.Console, secretStore secret.Store, providerName string) (model.SecretRef, error) {
+func selectProvider(console *ui.Console, current string) (provider.ProviderOption, error) {
+	options := provider.SupportedProviders()
+	currentOption, ok := provider.ProviderOptionByName(current)
+	defaultIndex := 0
+	if ok {
+		for i, option := range options {
+			if option.ID == currentOption.ID {
+				defaultIndex = i
+				break
+			}
+		}
+	}
+	menu := make([]ui.SelectOption, 0, len(options))
+	for _, option := range options {
+		menu = append(menu, ui.SelectOption{Label: fmt.Sprintf("%s (%s) - %s", option.Label, option.ID, option.Description)})
+	}
+	index, err := console.Select("Select LLM provider", menu, defaultIndex)
+	if err != nil {
+		return provider.ProviderOption{}, err
+	}
+	return options[index], nil
+}
+
+func selectRoleModel(console *ui.Console, providerName string, role model.Role, current string) (string, error) {
+	options := model.RecommendedModelOptions(providerName, role)
+	menu := make([]ui.SelectOption, 0, len(options)+2)
+	menuIDs := make([]string, 0, len(options)+2)
+	defaultIndex := 0
+	suggestedID := model.SuggestedModelID(providerName, role)
+
+	if current != "" && !modelOptionInList(options, current) {
+		menu = append(menu, ui.SelectOption{Label: fmt.Sprintf("Keep current model (%s)", current)})
+		menuIDs = append(menuIDs, current)
+		defaultIndex = 0
+	}
+
+	for i, option := range options {
+		menu = append(menu, ui.SelectOption{Label: option.PromptLabel()})
+		menuIDs = append(menuIDs, option.ID)
+		if option.ID == current || (current == "" && option.ID == suggestedID) {
+			defaultIndex = len(menu) - 1
+		}
+		if i == 0 && current == "" && suggestedID == "" {
+			defaultIndex = 0
+		}
+	}
+
+	menu = append(menu, ui.SelectOption{Label: "Custom model"})
+	menuIDs = append(menuIDs, "")
+
+	index, err := console.Select(fmt.Sprintf("Select %s model", role), menu, defaultIndex)
+	if err != nil {
+		return "", err
+	}
+	if menuIDs[index] != "" {
+		return menuIDs[index], nil
+	}
+
+	custom, err := console.AskDefault("Enter custom model name", current)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(custom) == "" {
+		return "", errors.New("model cannot be empty")
+	}
+	return custom, nil
+}
+
+func modelOptionInList(options []model.ModelOption, id string) bool {
+	for _, option := range options {
+		if option.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func configureSecret(ctx context.Context, console *ui.Console, secretStore secret.Store, providerOption provider.ProviderOption) (model.SecretRef, error) {
 	mode, err := console.AskDefault("API key storage method (keychain/env)", "env")
 	if err != nil {
 		return model.SecretRef{}, err
@@ -190,14 +260,14 @@ func configureSecret(ctx context.Context, console *ui.Console, secretStore secre
 	}
 
 	if mode == "keychain" {
-		ref := model.SecretRef{Kind: "keychain", Name: "agent-engine/" + providerName, Account: "default"}
+		ref := model.SecretRef{Kind: "keychain", Name: "agent-engine/" + providerOption.ID, Account: "default"}
 		if err := secretStore.Save(ctx, secret.Ref(ref), key); err != nil {
 			return model.SecretRef{}, err
 		}
 		return ref, nil
 	}
 
-	envName, err := console.AskDefault("Environment variable name for storing the API key", strings.ToUpper(providerName)+"_API_KEY")
+	envName, err := console.AskDefault("Environment variable name for storing the API key", providerOption.DefaultAPIKeyEnv)
 	if err != nil {
 		return model.SecretRef{}, err
 	}
